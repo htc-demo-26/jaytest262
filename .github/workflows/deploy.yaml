@@ -1,0 +1,63 @@
+name: Deploy Jaytest262
+
+on:
+  push:
+    branches: main
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+env:
+  AWS_ECR: ${{ secrets.AWS_ECR }}
+
+  IMAGE: jaytest262
+
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+
+  SCORE_HUMANITEC_VERSION: 0.7.0
+  APP_NAME: jaytest262
+
+
+jobs:
+  deploy:
+    name: Build & Notify Humanitec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set Tag with SHA
+        run: echo "TAG=`echo $GITHUB_SHA | cut -c 1-7`" >> $GITHUB_ENV
+
+      - run: |
+          aws ecr get-login-password --region $AWS_REGION \
+            | docker login \
+                --username AWS \
+                --password-stdin \
+                $AWS_ECR
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - run: docker build --platform linux/amd64 . -t $AWS_ECR/$IMAGE:$TAG
+      - run: docker push $AWS_ECR/$IMAGE:$TAG
+
+      - name: Inform Humanitec
+        run: |-
+          curl \
+            --request POST 'https://api.humanitec.io/orgs/${{ secrets.HUMANITEC_ORG_ID }}/artefact-versions' \
+            --header 'Authorization: Bearer ${{ secrets.HUMANITEC_TOKEN }}' \
+            --header 'Content-Type: application/json' \
+            --data-raw '{
+                "name": "'$AWS_ECR/$IMAGE'",
+                "version": "'$TAG'",
+                "type": "container",
+                "commit": "'$GITHUB_SHA'",
+                "ref": "'$GITHUB_REF'"
+            }'
+      - uses: score-spec/setup-score@v2
+        with:
+          file: score-humanitec
+          version: ${{ env.SCORE_HUMANITEC_VERSION }}
+      - name: Deploy using Score
+        run: |
+          score-humanitec delta --env development --app ${{ env.APP_NAME }} --org="${{ secrets.HUMANITEC_ORG_ID }}" --token "${{ secrets.HUMANITEC_TOKEN }}" --deploy --property containers.frontend.image=$AWS_ECR/$IMAGE:$TAG
+
