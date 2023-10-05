@@ -1,1 +1,1 @@
-FROM stefanprodan/podinfo:latest
+FROM carolynvs/whalesayd:v0.1.1
